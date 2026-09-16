@@ -36,7 +36,7 @@ const BANNED_PHRASES = [
  * @returns {Promise<string>}
  */
 export async function humanizeText({ text, tone = 'Neutral', strength = 'balanced' }) {
-  const apiKey = process.env.GROQ_API_KEY
+  const apiKey = (process.env.GROQ_API_KEY || '').trim()
   if (!apiKey) {
     const err = new Error(
       'GROQ_API_KEY is not set on the server. Add it to server/.env to enable humanization.'
@@ -94,6 +94,11 @@ export async function humanizeText({ text, tone = 'Neutral', strength = 'balance
 
     if (!res.ok) {
       const body = await res.text().catch(() => '')
+      if (res.status === 401) {
+        console.error(
+          `[humanize] Groq rejected the API key — length=${apiKey.length}, starts with "${apiKey.slice(0, 4)}", ends with "${apiKey.slice(-4)}". Check for a stray copy-paste of quotes, "GROQ_API_KEY=" prefix, or trailing newline in the Vercel env var.`
+        )
+      }
       const err = new Error(`Groq API error (${res.status}): ${body.slice(0, 300)}`)
       err.status = 502
       throw err
