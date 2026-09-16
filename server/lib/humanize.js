@@ -1,4 +1,8 @@
+import { detectAIText } from './detect.js'
+
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions'
+const MAX_PASSES = 3
+const TARGET_SCORE = 25
 
 const STRENGTH_GUIDANCE = {
   light: 'Make light touch-ups only: smooth awkward phrasing and vary a few sentence lengths. Keep the structure and wording close to the original.',
@@ -21,7 +25,9 @@ const BANNED_PHRASES = [
   'a testament to', 'in the world of', 'holistic approach', 'ever-evolving',
   'ever-changing landscape', 'game changer', 'game-changer', 'paradigm shift',
   'seamlessly integrate', 'seamless', 'robust solution', 'as previously mentioned',
-  'in a nutshell', 'in conclusion', 'in summary',
+  'in a nutshell', 'in conclusion', 'in summary', 'when it comes to',
+  'it is essential to', "it's essential to", 'as we have seen', 'let\'s dive in',
+  'let us dive in', 'stands as a testament', 'the importance of', 'in order to',
 ]
 
 /**
@@ -63,45 +69,69 @@ export async function humanizeText({ text, tone = 'Neutral', strength = 'balance
     'Return only the rewritten text, nothing else.',
   ].join(' ')
 
-  const res = await fetch(GROQ_URL, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: 2048,
-      temperature,
-      top_p: 0.95,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: `"""\n${text}\n"""` },
-      ],
-    }),
-  })
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: `"""\n${text}\n"""` },
+  ]
 
-  if (!res.ok) {
-    const body = await res.text().catch(() => '')
-    const err = new Error(`Groq API error (${res.status}): ${body.slice(0, 300)}`)
-    err.status = 502
-    throw err
+  let best = null
+
+  for (let pass = 0; pass < MAX_PASSES; pass++) {
+    const res = await fetch(GROQ_URL, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: 2048,
+        temperature: Math.min(temperature + pass * 0.08, 1.3),
+        top_p: 0.95,
+        messages,
+      }),
+    })
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => '')
+      const err = new Error(`Groq API error (${res.status}): ${body.slice(0, 300)}`)
+      err.status = 502
+      throw err
+    }
+
+    const data = await res.json()
+    const candidate = (data.choices || [])
+      .map((choice) => choice.message?.content || '')
+      .join('\n')
+      .trim()
+      .replace(/^"""\s*/, '')
+      .replace(/\s*"""$/, '')
+      .trim()
+
+    if (!candidate) continue
+
+    const { score, signals } = detectAIText(candidate)
+    if (!best || score < best.score) best = { text: candidate, score }
+
+    if (score <= TARGET_SCORE || pass === MAX_PASSES - 1) break
+
+    // Feed the weakest signals back in and ask for another pass on this candidate.
+    const worstSignals = signals
+      .filter((s) => s.contribution >= 45)
+      .map((s) => s.name)
+    const feedback = worstSignals.length
+      ? `That still reads ${score}% AI-like, mainly because of: ${worstSignals.join(', ')}. Rewrite it again, fixing those specific patterns while keeping the same meaning.`
+      : `That still reads ${score}% AI-like. Rewrite it again with more natural rhythm and wording, keeping the same meaning.`
+
+    messages.push({ role: 'assistant', content: candidate })
+    messages.push({ role: 'user', content: feedback })
   }
 
-  const data = await res.json()
-  const result = (data.choices || [])
-    .map((choice) => choice.message?.content || '')
-    .join('\n')
-    .trim()
-    .replace(/^"""\s*/, '')
-    .replace(/\s*"""$/, '')
-    .trim()
-
-  if (!result) {
+  if (!best) {
     const err = new Error('Received an empty response from the model.')
     err.status = 502
     throw err
   }
 
-  return result
+  return best.text
 }
