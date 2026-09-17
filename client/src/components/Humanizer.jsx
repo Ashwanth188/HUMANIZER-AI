@@ -21,9 +21,10 @@ const STRENGTHS = [
   { id: 'aggressive', label: 'Heavy rewrite', description: 'Full restructure for maximum human voice.' },
 ]
 
-export default function Humanizer() {
+export default function Humanizer({ onCheckInDetector }) {
   const [input, setInput] = useState('')
   const [output, setOutput] = useState('')
+  const [aiScore, setAiScore] = useState(null)
   const [tone, setTone] = useState('Neutral')
   const [strength, setStrength] = useState('balanced')
   const [loading, setLoading] = useState(false)
@@ -47,12 +48,18 @@ export default function Humanizer() {
 
   async function handleHumanize() {
     if (!input.trim()) return
+    if (input.length > 20000) {
+      setError(`Text is too long (${input.length.toLocaleString()} / 20,000 characters). Please shorten it.`)
+      return
+    }
     setLoading(true)
     setError('')
     setOutput('')
+    setAiScore(null)
     try {
       const data = await humanizeText({ text: input, tone, strength })
       setOutput(data.result)
+      if (typeof data.score === 'number') setAiScore(data.score)
     } catch (e) {
       setError(e.message || 'Something went wrong.')
     } finally {
@@ -60,11 +67,29 @@ export default function Humanizer() {
     }
   }
 
-  function handleCopy() {
+  async function handleCopy() {
     if (!output) return
-    navigator.clipboard.writeText(output)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 1500)
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(output)
+      } else {
+        // navigator.clipboard is unavailable over plain http on a LAN IP
+        const ta = document.createElement('textarea')
+        ta.value = output
+        ta.setAttribute('readonly', '')
+        ta.style.position = 'fixed'
+        ta.style.opacity = '0'
+        document.body.appendChild(ta)
+        ta.select()
+        const ok = document.execCommand('copy')
+        document.body.removeChild(ta)
+        if (!ok) throw new Error('copy failed')
+      }
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch {
+      setError('Could not copy to clipboard — select the text and copy it manually.')
+    }
   }
 
   async function handleFileChange(e) {
@@ -75,7 +100,7 @@ export default function Humanizer() {
     setError('')
     try {
       const text = await extractTextFromFile(file)
-      if (!text.trim()) {
+      if (!text || !text.trim()) {
         setError('No readable text found in that file.')
       } else {
         setInput(text)
@@ -170,24 +195,53 @@ export default function Humanizer() {
             rows={18}
             className="scroll-thin w-full resize-none rounded-xl border border-slate-200 bg-white p-4 text-base leading-relaxed text-slate-900 placeholder:text-slate-400 focus:border-brand-500 focus:outline-none dark:border-slate-800 dark:bg-slate-900/60 dark:text-slate-100 dark:placeholder:text-slate-600"
           />
-          <div className="mt-1 text-right text-xs text-slate-400 dark:text-slate-600">{input.length} chars</div>
+          <div className="mt-1 flex items-center justify-between text-xs text-slate-400 dark:text-slate-600">
+            <span>{input.trim() ? `${input.trim().split(/\s+/).length} words` : ''}</span>
+            <span className={input.length > 20000 ? 'font-semibold text-red-500 dark:text-red-400' : ''}>
+              {input.length.toLocaleString()} / 20,000 chars
+            </span>
+          </div>
         </div>
 
         <div className="flex flex-col">
           <label className="mb-1.5 text-xs font-medium text-slate-500 dark:text-slate-400">Humanized text</label>
           <textarea
             value={output}
-            readOnly
+            onChange={(e) => setOutput(e.target.value)}
             placeholder="Your rewritten text will appear here…"
             rows={18}
-            className="scroll-thin w-full resize-none rounded-xl border border-slate-200 bg-white p-4 text-base leading-relaxed text-slate-900 placeholder:text-slate-400 focus:outline-none dark:border-slate-800 dark:bg-slate-900/60 dark:text-slate-100 dark:placeholder:text-slate-600"
+            className="scroll-thin w-full resize-none rounded-xl border border-slate-200 bg-white p-4 text-base leading-relaxed text-slate-900 placeholder:text-slate-400 focus:border-brand-500 focus:outline-none dark:border-slate-800 dark:bg-slate-900/60 dark:text-slate-100 dark:placeholder:text-slate-600"
           />
-          <div className="mt-1 flex h-[18px] items-center justify-end gap-1.5">
+          <div className="mt-1 flex min-h-[28px] items-center justify-between gap-2 text-xs">
+            <div className="flex items-center gap-2 text-slate-400 dark:text-slate-600">
+              {output && <span>{output.length.toLocaleString()} chars</span>}
+              {typeof aiScore === 'number' && (
+                <span className={`inline-flex items-center rounded-md px-1.5 py-0.5 text-[11px] font-medium ${
+                  aiScore < 35
+                    ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400'
+                    : aiScore < 65
+                    ? 'bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400'
+                    : 'bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-400'
+                }`}>
+                  ~{aiScore}% AI score
+                </span>
+              )}
+            </div>
+
             {output && (
-              <>
+              <div className="flex items-center gap-1.5">
+                {onCheckInDetector && (
+                  <button
+                    onClick={() => onCheckInDetector(output)}
+                    className="rounded-md border border-brand-200 bg-brand-50 px-2 py-1 text-xs font-medium text-brand-700 hover:bg-brand-100 dark:border-brand-800 dark:bg-brand-950/40 dark:text-brand-300 dark:hover:bg-brand-900/50"
+                    title="Analyze this humanized text in the AI Checker"
+                  >
+                    Check AI % ➔
+                  </button>
+                )}
                 <button
                   onClick={handleCopy}
-                  className="rounded-md border border-slate-200 bg-slate-100 px-2 py-0.5 text-xs text-slate-600 hover:bg-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+                  className="rounded-md border border-slate-200 bg-slate-100 px-2 py-1 text-xs text-slate-600 hover:bg-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
                 >
                   {copied ? 'Copied' : 'Copy'}
                 </button>
@@ -196,7 +250,7 @@ export default function Humanizer() {
                   <button
                     onClick={() => setExportOpen((v) => !v)}
                     disabled={exporting}
-                    className="rounded-md border border-slate-200 bg-slate-100 px-2 py-0.5 text-xs text-slate-600 hover:bg-slate-200 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+                    className="rounded-md border border-slate-200 bg-slate-100 px-2 py-1 text-xs text-slate-600 hover:bg-slate-200 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
                   >
                     {exporting ? 'Exporting…' : 'Export as ▾'}
                   </button>
@@ -215,7 +269,7 @@ export default function Humanizer() {
                     </div>
                   )}
                 </div>
-              </>
+              </div>
             )}
           </div>
         </div>

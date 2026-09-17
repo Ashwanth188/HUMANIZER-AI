@@ -6,7 +6,8 @@ function downloadBlob(blob, filename) {
   document.body.appendChild(a)
   a.click()
   document.body.removeChild(a)
-  URL.revokeObjectURL(url)
+  // Revoking synchronously can cancel the download in Firefox/Safari.
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
 export function exportAsTxt(text, filename = 'humanized-text.txt') {
@@ -19,7 +20,7 @@ export async function exportAsDocx(text, filename = 'humanized-text.docx') {
   const paragraphs = text
     .split(/\n+/)
     .filter((line) => line.trim())
-    .map((line) => new Paragraph(line))
+    .map((line) => new Paragraph({ text: line, spacing: { after: 160 } }))
 
   const doc = new Document({
     sections: [{ children: paragraphs.length ? paragraphs : [new Paragraph('')] }],

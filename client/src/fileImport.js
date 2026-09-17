@@ -22,7 +22,12 @@ async function readPdf(file) {
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i)
     const content = await page.getTextContent()
-    pageTexts.push(content.items.map((item) => item.str).join(' '))
+    const pageText = content.items
+      .map((item) => (item.str || '') + (item.hasEOL ? '\n' : ' '))
+      .join('')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/[ \t]{2,}/g, ' ')
+    pageTexts.push(pageText.trim())
   }
   return pageTexts.join('\n\n')
 }
@@ -35,7 +40,7 @@ async function readPdf(file) {
 export async function extractTextFromFile(file) {
   const name = file.name.toLowerCase()
 
-  if (name.endsWith('.txt')) return readTxt(file)
+  if (name.endsWith('.txt') || name.endsWith('.text')) return readTxt(file)
   if (name.endsWith('.docx')) return readDocx(file)
   if (name.endsWith('.pdf')) return readPdf(file)
 

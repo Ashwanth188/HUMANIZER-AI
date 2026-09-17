@@ -80,5 +80,6 @@ This is a **heuristic estimate**, not a trained ML classifier — it's a useful 
 ## Notes / next steps
 
 - No database or auth yet — it's a stateless two-endpoint API. Add a DB if you want to save history.
-- Rate limiting isn't implemented — add it (e.g. `express-rate-limit`) before deploying publicly, since `/api/humanize` costs API credits per call.
+- Rate limiting is enabled via `express-rate-limit` (30 requests / 15 min per IP on `/api/humanize` and `/api/detect`). Tune it in `server/index.js` before deploying publicly.
+- When deploying the client separately (e.g. Vercel), set `VITE_API_BASE_URL` to your deployed API's origin at build time — otherwise `/api/*` requests hit the static host and fail.
 - To deploy: host `server/` anywhere that runs Node (Render, Railway, Fly.io, etc.) with `GROQ_API_KEY` set as an env var, run `npm run build` in `client/` and serve the static output (e.g. via Vercel/Netlify, or have Express serve `client/dist`) pointed at your deployed API URL.

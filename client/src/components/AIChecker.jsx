@@ -1,5 +1,6 @@
-import React, { useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { detectText } from '../api.js'
+import { extractTextFromFile } from '../fileImport.js'
 
 function scoreColor(pct) {
   if (pct >= 66) return { ring: '#f87171', text: 'text-red-500 dark:text-red-400', label: 'Likely AI-generated' }
@@ -38,14 +39,26 @@ function Gauge({ pct }) {
   )
 }
 
-export default function AIChecker() {
-  const [input, setInput] = useState('')
+export default function AIChecker({ initialText = '' }) {
+  const [input, setInput] = useState(initialText)
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [uploading, setUploading] = useState(false)
+  const fileInputRef = useRef(null)
+
+  useEffect(() => {
+    if (initialText) {
+      setInput(initialText)
+    }
+  }, [initialText])
 
   async function handleCheck() {
     if (!input.trim()) return
+    if (input.length > 50000) {
+      setError(`Text is too long (${input.length.toLocaleString()} / 50,000 characters). Please shorten it.`)
+      return
+    }
     setLoading(true)
     setError('')
     setResult(null)
@@ -59,6 +72,27 @@ export default function AIChecker() {
     }
   }
 
+  async function handleFileChange(e) {
+    const file = e.target.files && e.target.files[0]
+    e.target.value = ''
+    if (!file) return
+    setUploading(true)
+    setError('')
+    try {
+      const text = await extractTextFromFile(file)
+      if (!text || !text.trim()) {
+        setError('No readable text found in that file.')
+      } else {
+        setInput(text)
+        setResult(null)
+      }
+    } catch (err) {
+      setError(err.message || 'Could not read that file.')
+    } finally {
+      setUploading(false)
+    }
+  }
+
   const primaryScore = result ? (result.external ? result.external.score : result.score) : null
   const primaryIsReal = Boolean(result && result.external)
   const c = result ? scoreColor(primaryScore) : null
@@ -66,17 +100,35 @@ export default function AIChecker() {
   return (
     <div className="space-y-4">
       <div className="flex flex-col">
-        <label className="mb-1.5 text-xs font-medium text-slate-500 dark:text-slate-400">Text to analyze</label>
+        <div className="mb-1.5 flex items-center justify-between">
+          <label className="text-xs font-medium text-slate-500 dark:text-slate-400">Text to analyze</label>
+          <button
+            onClick={() => fileInputRef.current && fileInputRef.current.click()}
+            disabled={uploading}
+            className="rounded-md border border-slate-200 bg-slate-100 px-2 py-0.5 text-xs text-slate-600 hover:bg-slate-200 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+          >
+            {uploading ? 'Reading…' : 'Upload file'}
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".txt,.docx,.pdf"
+            onChange={handleFileChange}
+            className="hidden"
+          />
+        </div>
         <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="Paste text to check…"
+          placeholder="Paste text to check, or upload a .txt/.docx/.pdf…"
           rows={16}
           className="scroll-thin w-full resize-none rounded-xl border border-slate-200 bg-white p-4 text-base leading-relaxed text-slate-900 placeholder:text-slate-400 focus:border-brand-500 focus:outline-none dark:border-slate-800 dark:bg-slate-900/60 dark:text-slate-100 dark:placeholder:text-slate-600"
         />
         <div className="mt-1 flex items-center justify-between text-xs text-slate-400 dark:text-slate-600">
           <span>{input.trim() ? `${input.trim().split(/\s+/).length} words` : ''}</span>
-          <span>{input.length} chars</span>
+          <span className={input.length > 50000 ? 'font-semibold text-red-500 dark:text-red-400' : ''}>
+            {input.length.toLocaleString()} / 50,000 chars
+          </span>
         </div>
       </div>
 

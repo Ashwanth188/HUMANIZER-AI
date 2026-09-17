@@ -38,7 +38,8 @@ const CONTRACTIONS = [
 // Casual/informal markers (texting-style contractions and filler) — count
 // alongside apostrophe contractions as evidence of an informal human voice.
 const INFORMAL_MARKERS = [
-  'im', 'dont', 'cant', 'wont', 'its', 'thats', 'ur', 'u', 'gonna', 'wanna',
+  // Note: 'its' deliberately excluded — it's the correct possessive, not slang.
+  'im', 'dont', 'cant', 'wont', 'thats', 'ur', 'u', 'gonna', 'wanna',
   'kinda', 'sorta', 'gotta', 'lol', 'lmao', 'omg', 'tbh', 'idk', 'yeah',
   'nah', 'okay', 'ok', 'hmm', 'ugh',
 ]
@@ -48,19 +49,19 @@ function clamp(n, min = 0, max = 100) {
 }
 
 function splitSentences(text) {
-  const clean = text.replace(/\s+/g, ' ').trim()
-  if (!clean) return []
-  // Split on sentence-ending punctuation followed by whitespace. Deliberately
-  // case-agnostic about the next character so casual/lowercase writing
-  // (common in human text) still splits correctly.
-  return clean
-    .split(/(?<=[.!?])\s+/)
-    .map((s) => s.trim())
+  if (!text || !text.trim()) return []
+  // Split on sentence-ending punctuation followed by whitespace, or newline breaks
+  // so bullet points, multi-paragraph text and poetry split cleanly.
+  return text
+    .split(/(?<=[.!?])\s+|\r?\n+/)
+    .map((s) => s.replace(/\s+/g, ' ').trim())
     .filter(Boolean)
 }
 
 function splitWords(text) {
   return (text.toLowerCase().match(/[a-z0-9']+/g) || [])
+    .map((w) => w.replace(/^'+|'+$/g, ''))
+    .filter(Boolean)
 }
 
 function mean(arr) {
@@ -90,12 +91,14 @@ function countOccurrences(haystack, needle) {
  * @param {string} rawText
  */
 export function detectAIText(rawText) {
-  const text = (rawText || '').trim()
+  // Normalize typographic apostrophes (’ ‘ ʼ) so contractions like "don’t" —
+  // which LLMs, Word and PDFs emit constantly — are recognized.
+  const text = (rawText || '').replace(/[\u2018\u2019\u02BC]/g, "'").trim()
   const lower = text.toLowerCase()
   const sentences = splitSentences(text)
   const words = splitWords(text)
-  const wordCount = words.length || 1
-  const per100 = (n) => (n / wordCount) * 100
+  const wordCount = words.length
+  const per100 = (n) => (wordCount ? (n / wordCount) * 100 : 0)
 
   // 1. Burstiness — coefficient of variation of sentence length (in words).
   // With fewer than 3 sentences there isn't enough data for variance to mean
@@ -117,29 +120,34 @@ export function detectAIText(rawText) {
   const clicheScore = clamp(Math.round(per100(clicheHits) * 45))
 
   // 3. Repetitive transition-word sentence openers.
+  // Note: openers can only be repetitive when there are at least 2 sentences.
   let transitionStarters = 0
   for (const s of sentences) {
-    const firstWord = (splitWords(s)[0] || '')
-    const firstTwo = splitWords(s).slice(0, 2).join(' ')
+    const wordsInSentence = splitWords(s)
+    const firstWord = (wordsInSentence[0] || '')
+    const firstTwo = wordsInSentence.slice(0, 2).join(' ')
     if (TRANSITION_STARTERS.includes(firstWord) || TRANSITION_STARTERS.includes(firstTwo)) {
       transitionStarters += 1
     }
   }
-  const starterRatio = sentences.length ? transitionStarters / sentences.length : 0
-  const starterScore = clamp(Math.round(starterRatio * 220))
+  const starterRatio = sentences.length >= 2 ? transitionStarters / sentences.length : 0
+  const starterScore = clamp(Math.round(starterRatio * 180))
 
-  // 4. Contraction / informality usage — absence skews AI/formal.
+  // 4. Contraction / informality usage — absence mildly skews formal,
+  // but many legitimate human texts (academic, business, journalism) avoid slang.
+  // Base absence score starts at 55 rather than 100, dropping sharply when
+  // contractions/slang are present.
   let contractionCount = 0
-  for (const c of CONTRACTIONS) {
-    contractionCount += countOccurrences(lower, c)
+  const contractionSet = new Set(CONTRACTIONS)
+  for (const w of words) {
+    if (contractionSet.has(w)) contractionCount += 1
   }
-  const wordSet = words
   let informalCount = 0
-  for (const w of wordSet) {
+  for (const w of words) {
     if (INFORMAL_MARKERS.includes(w)) informalCount += 1
   }
   const informalityCount = contractionCount + informalCount
-  const contractionAbsenceScore = clamp(Math.round(100 - per100(informalityCount) * 45))
+  const contractionAbsenceScore = clamp(Math.round(55 - per100(informalityCount) * 25))
 
   // 5. Repeated phrasing — exact bigram repetition ratio.
   const bigrams = []

@@ -2,13 +2,15 @@ import { detectAIText } from './detect.js'
 
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions'
 const MAX_PASSES = 3
-const TARGET_SCORE = 25
+const TARGET_SCORE = 32
 
 const STRENGTH_GUIDANCE = {
   light: 'Make light touch-ups only: smooth awkward phrasing and vary a few sentence lengths. Keep the structure and wording close to the original.',
   balanced: 'Rewrite naturally: vary sentence length and structure, replace stiff or overly formal phrasing, cut generic filler and AI-sounding transitions, and add a touch of natural imperfection. Keep it moderately close to the original meaning and length.',
   aggressive: 'Rewrite thoroughly in a distinctly human voice: restructure sentences, mix short and long sentences, use contractions where natural, cut hedging and repetitive connectors, and avoid formulaic AI patterns. You may reorganize freely as long as the meaning is preserved.',
 }
+
+const ALLOWED_TONES = ['Neutral', 'Casual', 'Professional', 'Academic']
 
 const STRENGTH_TEMPERATURE = {
   light: 0.85,
@@ -35,8 +37,10 @@ const BANNED_PHRASES = [
  * @param {{ text: string, tone?: string, strength?: string }} params
  * @returns {Promise<string>}
  */
-export async function humanizeText({ text, tone = 'Neutral', strength = 'balanced' }) {
-  const apiKey = (process.env.GROQ_API_KEY || '').trim()
+export async function humanizeText({ text, tone: rawTone, strength = 'balanced' }) {
+  // Tone is interpolated into the system prompt, so only accept known values.
+  const tone = ALLOWED_TONES.includes(rawTone) ? rawTone : 'Neutral'
+  const apiKey = (process.env.GROQ_API_KEY || '').trim().replace(/^["']|["']$/g, '')
   if (!apiKey) {
     const err = new Error(
       'GROQ_API_KEY is not set on the server. Add it to server/.env to enable humanization.'
@@ -69,6 +73,11 @@ export async function humanizeText({ text, tone = 'Neutral', strength = 'balance
     'Return only the rewritten text, nothing else.',
   ].join(' ')
 
+  const isReasoningModel = /gpt-oss/i.test(model)
+  // Output budget must scale with input size (~4 chars/token), otherwise long
+  // inputs get silently truncated. Reasoning models also spend tokens thinking.
+  const maxTokens = Math.min(16384, Math.ceil(text.length / 3) + (isReasoningModel ? 2048 : 512))
+
   const messages = [
     { role: 'system', content: systemPrompt },
     { role: 'user', content: `"""\n${text}\n"""` },
@@ -77,31 +86,56 @@ export async function humanizeText({ text, tone = 'Neutral', strength = 'balance
   let best = null
 
   for (let pass = 0; pass < MAX_PASSES; pass++) {
-    const res = await fetch(GROQ_URL, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        max_tokens: 2048,
-        temperature: Math.min(temperature + pass * 0.08, 1.3),
-        top_p: 0.95,
-        messages,
-      }),
-    })
+    let res
+    try {
+      res = await fetch(GROQ_URL, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: maxTokens,
+          temperature: Math.min(temperature + pass * 0.08, 1.3),
+          top_p: 0.95,
+          ...(isReasoningModel ? { reasoning_effort: 'low' } : {}),
+          messages,
+        }),
+        signal: AbortSignal.timeout(60_000),
+      })
+    } catch (networkErr) {
+      // A later pass failing shouldn't throw away a good earlier result.
+      if (best) break
+      const err = new Error(
+        networkErr.name === 'TimeoutError'
+          ? 'The model took too long to respond. Please try again.'
+          : `Could not reach the Groq API: ${networkErr.message}`
+      )
+      err.status = 504
+      throw err
+    }
 
     if (!res.ok) {
       const body = await res.text().catch(() => '')
+      if (best) {
+        console.error(`[humanize] pass ${pass + 1} failed (${res.status}); returning best earlier result`)
+        break
+      }
       if (res.status === 401) {
-        const diag = `key diagnostics: length=${apiKey.length}, starts="${apiKey.slice(0, 4)}", ends="${apiKey.slice(-4)}"`
-        console.error(`[humanize] Groq rejected the API key — ${diag}`)
-        const err = new Error(`Groq API error (401): Invalid API Key. ${diag}`)
+        // Log diagnostics server-side only — never send key fragments to the browser.
+        console.error(`[humanize] Groq rejected the API key (length=${apiKey.length}). Check GROQ_API_KEY in server/.env.`)
+        const err = new Error('The server\'s Groq API key was rejected. Check GROQ_API_KEY in server/.env.')
         err.status = 502
         throw err
       }
-      const err = new Error(`Groq API error (${res.status}): ${body.slice(0, 300)}`)
+      if (res.status === 429) {
+        const err = new Error('The AI provider is rate-limiting requests right now. Please wait a moment and try again.')
+        err.status = 503
+        throw err
+      }
+      console.error(`[humanize] Groq API error (${res.status}): ${body.slice(0, 300)}`)
+      const err = new Error(`Groq API error (${res.status}). Please try again.`)
       err.status = 502
       throw err
     }
@@ -118,9 +152,13 @@ export async function humanizeText({ text, tone = 'Neutral', strength = 'balance
     if (!candidate) continue
 
     const { score, signals } = detectAIText(candidate)
+    const previousScore = best ? best.score : 100
     if (!best || score < best.score) best = { text: candidate, score }
 
-    if (score <= TARGET_SCORE || pass === MAX_PASSES - 1) break
+    // Exit early if target score reached or if subsequent passes stopped improving
+    if (score <= TARGET_SCORE || pass === MAX_PASSES - 1 || (pass > 0 && Math.abs(score - previousScore) < 3)) {
+      break
+    }
 
     // Feed the weakest signals back in and ask for another pass on this candidate.
     const worstSignals = signals
@@ -140,5 +178,5 @@ export async function humanizeText({ text, tone = 'Neutral', strength = 'balance
     throw err
   }
 
-  return best.text
+  return { text: best.text, score: best.score }
 }

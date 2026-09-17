@@ -18,12 +18,12 @@ function ThemeToggle({ theme, setTheme }) {
       className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors hover:bg-slate-100 dark:border-slate-800 dark:bg-slate-900/60 dark:text-slate-300 dark:hover:bg-slate-800"
     >
       {isDark ? (
-        <svg viewBox="0 0 24 24" fill="none" className="h-4.5 w-4.5" strokeWidth="1.8" stroke="currentColor">
+        <svg viewBox="0 0 24 24" fill="none" className="h-[18px] w-[18px]" strokeWidth="1.8" stroke="currentColor">
           <circle cx="12" cy="12" r="4.5" />
           <path strokeLinecap="round" d="M12 2.5v2M12 19.5v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M2.5 12h2M19.5 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4" />
         </svg>
       ) : (
-        <svg viewBox="0 0 24 24" fill="currentColor" className="h-4.5 w-4.5">
+        <svg viewBox="0 0 24 24" fill="currentColor" className="h-[18px] w-[18px]">
           <path d="M20.5 14.6a8.5 8.5 0 1 1-9.1-11 7 7 0 0 0 9.1 11Z" />
         </svg>
       )}
@@ -34,6 +34,12 @@ function ThemeToggle({ theme, setTheme }) {
 export default function App() {
   const [tab, setTab] = useState('humanize')
   const [theme, setTheme] = useTheme()
+  const [detectorInitialText, setDetectorInitialText] = useState('')
+
+  function handleCheckInDetector(text) {
+    setDetectorInitialText(text)
+    setTab('detect')
+  }
 
   return (
     <div className="min-h-full bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
@@ -83,7 +89,13 @@ export default function App() {
         </nav>
 
         <main className="flex-1">
-          {tab === 'humanize' ? <Humanizer /> : <AIChecker />}
+          {/* Keep both mounted so switching tabs doesn't wipe text/results */}
+          <div hidden={tab !== 'humanize'}>
+            <Humanizer onCheckInDetector={handleCheckInDetector} />
+          </div>
+          <div hidden={tab !== 'detect'}>
+            <AIChecker initialText={detectorInitialText} />
+          </div>
         </main>
 
         <footer className="mt-10 text-center text-xs font-medium text-slate-400 dark:text-slate-600">
