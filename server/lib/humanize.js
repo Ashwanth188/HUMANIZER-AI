@@ -95,9 +95,11 @@ export async function humanizeText({ text, tone = 'Neutral', strength = 'balance
     if (!res.ok) {
       const body = await res.text().catch(() => '')
       if (res.status === 401) {
-        console.error(
-          `[humanize] Groq rejected the API key — length=${apiKey.length}, starts with "${apiKey.slice(0, 4)}", ends with "${apiKey.slice(-4)}". Check for a stray copy-paste of quotes, "GROQ_API_KEY=" prefix, or trailing newline in the Vercel env var.`
-        )
+        const diag = `key diagnostics: length=${apiKey.length}, starts="${apiKey.slice(0, 4)}", ends="${apiKey.slice(-4)}"`
+        console.error(`[humanize] Groq rejected the API key — ${diag}`)
+        const err = new Error(`Groq API error (401): Invalid API Key. ${diag}`)
+        err.status = 502
+        throw err
       }
       const err = new Error(`Groq API error (${res.status}): ${body.slice(0, 300)}`)
       err.status = 502
